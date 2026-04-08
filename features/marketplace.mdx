@@ -1,0 +1,193 @@
+---
+title: "Marketplace"
+description: "Browse listings, create your own, manage your inventory, and report problems"
+---
+
+The CampusHub marketplace lets students buy and sell items directly with each other. Listings are visible to anyone — no account required to browse. Creating a listing, messaging a seller, or reporting a problem requires signing in.
+
+---
+
+## Browsing Listings
+
+The Browse page (`/browse`) shows all active listings in a responsive grid. The page loads up to 12 items at a time with pagination.
+
+### Search
+
+Type any keyword into the search bar at the top of the page. Results update automatically with a short debounce so the page is not spamming requests as you type. The search runs against both the listing title and description.
+
+### Filters
+
+Use the filter bar beneath the search input to narrow results:
+
+| Filter | Options |
+|---|---|
+| **Category** | All, Textbooks, Electronics, Furniture, Clothing, Other |
+| **Min Price** | Any dollar amount |
+| **Max Price** | Any dollar amount |
+| **Sort** | Newest first (`created_desc`), or other sort options |
+
+Filters and search can be combined freely. A "Clear" button resets all filters to their defaults.
+
+### Listing Conditions
+
+Each listing has one of the following conditions, set by the seller at creation time:
+
+| Value | Label |
+|---|---|
+| `New` | New |
+| `LikeNew` | Like New |
+| `Good` | Good |
+| `Fair` | Fair |
+
+### Listing Statuses
+
+| Status | Meaning |
+|---|---|
+| `active` | Available for purchase — shown in browse results |
+| `sold` | Marked as sold by the seller — no longer shown in default browse |
+| `removed` | Force-removed by an admin — hidden from all views |
+
+---
+
+## Creating a Listing
+
+You must be signed in to create a listing. Click **Post a Listing** from the Browse page or navigate directly to `/sell`.
+
+<Steps>
+  <Step title="Fill in the listing details">
+    Complete the form with the following required fields:
+
+    - **Title** — 3 to 120 characters. Example: `CMPE 202 Textbook - Software Engineering`
+    - **Description** — at least 10 characters. Describe the item's condition, any defects, and why you are selling it. Maximum 500 characters.
+    - **Category** — select one of: Textbooks, Electronics, Furniture, Clothing, Other
+    - **Condition** — select one of: New, Like New, Good, Fair
+    - **Price** — must be greater than $0. Enter in dollars (e.g., `35.00`)
+  </Step>
+  <Step title="Add images (optional)">
+    Use the image picker to select one or more photos of the item. The first image you add becomes the primary image shown in listing cards.
+
+    Images are uploaded separately after the listing is created — see the Image Upload Flow below.
+  </Step>
+  <Step title="Publish">
+    Click **Publish Listing**. The form validates all fields before submitting. If there are errors, a red message appears next to the relevant field.
+
+    A toast notification shows progress: _"Creating your listing..."_ → _"Listing created! Uploading images..."_ → _"Listing created successfully!"_
+
+    You are then redirected to the listing detail page.
+  </Step>
+</Steps>
+
+<Tip>
+  For the best results: use a clear, descriptive title; include photos from multiple angles; be honest about the item's condition; and price competitively based on market value.
+</Tip>
+
+---
+
+## Image Upload Flow
+
+Images are uploaded in three steps using presigned S3 URLs. The frontend handles all three steps automatically when you publish a listing, but here is what happens under the hood:
+
+<Steps>
+  <Step title="Request a presigned PUT URL">
+    Send the filename and content type to get a temporary upload URL from S3.
+
+    ```json
+    POST /v1/uploads/presign
+    Authorization: Bearer <JWT>
+    Content-Type: application/json
+
+    {
+      "fileName": "book.jpg",
+      "contentType": "image/jpeg"
+    }
+    ```
+
+    Response includes the presigned URL and the S3 key:
+
+    ```json
+    {
+      "data": {
+        "url": "https://s3...signed-put...",
+        "key": "uploads/2025/10/<uuid>.jpg"
+      }
+    }
+    ```
+  </Step>
+  <Step title="Upload the file directly to S3">
+    Use the exact URL from step 1 to `PUT` the image binary. Do not modify the URL's host or query parameters.
+
+    ```bash
+    curl -X PUT "<signed-put-url>" \
+      -H "Content-Type: image/jpeg" \
+      --data-binary "@/path/to/book.jpg"
+    ```
+  </Step>
+  <Step title="Attach the image to the listing">
+    Notify the backend that the upload is complete and link the S3 key to the listing. Set `isPrimary: true` for the first image.
+
+    ```json
+    POST /v1/uploads/complete
+    Authorization: Bearer <JWT>
+    Content-Type: application/json
+
+    {
+      "listingId": "<listing-uuid>",
+      "key": "uploads/2025/10/<uuid>.jpg",
+      "isPrimary": true
+    }
+    ```
+
+    The listing will now show the image in browse results and on its detail page.
+  </Step>
+</Steps>
+
+---
+
+## Managing Your Listings
+
+Signed-in users can view all their own listings on the **My Listings** page. This page shows listings of all statuses (active, sold) for the signed-in seller.
+
+From this page you can:
+
+- **Edit** — Update the title, description, category, price, or condition using `PATCH /v1/listings/:id`. Only send the fields you want to change.
+- **Mark as Sold** — Changes the status from `active` to `sold`. The listing will no longer appear in public browse results.
+- **Delete** — Performs a soft-delete (`removed` status). The listing is hidden from all browse results but remains in the database.
+
+<Note>
+  Deleting a listing is a soft delete — the record is not permanently erased. Admins can still see removed listings.
+</Note>
+
+---
+
+## Reporting a Listing
+
+Any signed-in user can report a listing that violates the marketplace guidelines. On the Browse page, each listing card has a report option that opens the **ReportModal**.
+
+In the modal:
+
+1. You will see the listing title you are reporting.
+2. Enter a reason (3 to 500 characters). For example: _"Listing is duplicate/incomplete"_ or _"Seller is posting spam"_.
+3. Submit the report.
+
+A toast confirms: _"Thank you! Your report has been submitted to the Admin team for review."_
+
+Reports start with status `open` and are reviewed by admins on the Moderation Dashboard. See [Admin Dashboard](/features/admin-dashboard) for the resolution workflow.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Listings API" href="/api/listings">
+    Full reference for listing creation, retrieval, update, and deletion endpoints
+  </Card>
+  <Card title="Uploads API" href="/api/uploads">
+    Presign and complete endpoints for image management
+  </Card>
+  <Card title="Reports API" href="/api/reports">
+    Endpoint reference for submitting and managing reports
+  </Card>
+  <Card title="Admin Dashboard" href="/features/admin-dashboard">
+    How admins review and act on user-submitted reports
+  </Card>
+</CardGroup>

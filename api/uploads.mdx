@@ -1,0 +1,165 @@
+---
+title: 'Image uploads'
+description: 'Upload listing images to S3/MinIO using a three-step presigned URL flow.'
+keywords: ['image upload', 'presigned url', 's3', 'minio', 'file upload']
+---
+
+CampusHub uses a three-step presigned URL flow to upload images. The client never sends the file to the API server — instead, it uploads directly to the object storage bucket (S3 in production, MinIO in development) using a short-lived signed URL. Once the upload is complete, the client calls the API to attach the file to a listing.
+
+<Warning>
+  Do not modify the presigned URL in any way. Use the `url` value from the presign response exactly as returned, including all query parameters.
+</Warning>
+
+Both upload endpoints require authentication.
+
+**Required roles:** `buyer`, `seller`, `admin`
+
+---
+
+<Steps>
+
+<Step title="Get a presigned upload URL">
+
+Request a signed PUT URL from the API. The URL is valid for 15 minutes by default (configurable via the `PRESIGN_EXPIRY` environment variable).
+
+```
+POST /v1/uploads/presign
+```
+
+#### Request body
+
+<ParamField body="fileName" type="string" required>
+  Original file name including extension, e.g. `book.jpg`. Used to determine the file extension for the S3 object key.
+</ParamField>
+
+<ParamField body="contentType" type="string" required>
+  MIME type of the file. Supported values: `image/jpeg`, `image/png`.
+</ParamField>
+
+#### Response
+
+<ResponseField name="data" type="object">
+  <Expandable title="properties">
+    <ResponseField name="url" type="string">
+      Presigned PUT URL. Send the file body directly to this URL using HTTP PUT.
+    </ResponseField>
+    <ResponseField name="key" type="string">
+      S3 object key where the file will be stored, e.g. `uploads/2025/10/uuid.jpg`. Save this value — you will need it in step 3.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```bash
+curl -X POST http://localhost:8082/v1/uploads/presign \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"fileName": "book.jpg", "contentType": "image/jpeg"}'
+```
+
+```json
+{
+  "data": {
+    "url": "https://s3.amazonaws.com/campushub-bucket/uploads/2025/10/uuid.jpg?X-Amz-Algorithm=...",
+    "key": "uploads/2025/10/uuid.jpg"
+  }
+}
+```
+
+</Step>
+
+<Step title="Upload the file directly to object storage">
+
+Send the file contents to the presigned URL using an HTTP PUT request. This request goes directly to S3/MinIO — not through the CampusHub API.
+
+Set the `Content-Type` header to the same value you specified in step 1.
+
+```bash
+curl -X PUT "https://s3.amazonaws.com/campushub-bucket/uploads/2025/10/uuid.jpg?X-Amz-Algorithm=..." \
+  -H "Content-Type: image/jpeg" \
+  --data-binary "@/path/to/book.jpg"
+```
+
+A successful upload returns an empty `200 OK` response from S3/MinIO.
+
+<Note>
+  The presigned URL expires 15 minutes after it is issued. If the upload does not complete within this window, request a new URL from step 1 and start over.
+</Note>
+
+</Step>
+
+<Step title="Attach the uploaded file to a listing">
+
+After the file is in object storage, tell the API to associate it with a listing. The API verifies the object exists in the bucket before creating the image record.
+
+```
+POST /v1/uploads/complete
+```
+
+#### Request body
+
+<ParamField body="listingId" type="string" required>
+  UUID of the listing to attach the image to. The listing must already exist.
+</ParamField>
+
+<ParamField body="key" type="string" required>
+  S3 object key returned in step 1, e.g. `uploads/2025/10/uuid.jpg`.
+</ParamField>
+
+<ParamField body="isPrimary" type="boolean">
+  Set to `true` to make this the listing's primary display image. Defaults to `false`.
+</ParamField>
+
+#### Response
+
+Returns `200 OK` with the created image record.
+
+<ResponseField name="data" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">UUID of the image record.</ResponseField>
+    <ResponseField name="listingId" type="string">UUID of the parent listing.</ResponseField>
+    <ResponseField name="s3Key" type="string">S3 object key.</ResponseField>
+    <ResponseField name="isPrimary" type="boolean">Whether this is the primary listing image.</ResponseField>
+    <ResponseField name="createdAt" type="string">ISO 8601 timestamp when the record was created.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```bash
+curl -X POST http://localhost:8082/v1/uploads/complete \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "listingId": "11111111-1111-1111-1111-111111111111",
+    "key": "uploads/2025/10/uuid.jpg",
+    "isPrimary": true
+  }'
+```
+
+```json
+{
+  "data": {
+    "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+    "listingId": "11111111-1111-1111-1111-111111111111",
+    "s3Key": "uploads/2025/10/uuid.jpg",
+    "isPrimary": true,
+    "createdAt": "2025-10-29T22:41:17Z"
+  }
+}
+```
+
+</Step>
+
+</Steps>
+
+---
+
+## Notes
+
+- **Supported file types:** `image/jpeg`, `image/png`
+- **Presigned URL expiry:** 15 minutes by default. Configurable via the `PRESIGN_EXPIRY` environment variable.
+- **Object key format:** `uploads/YYYY/MM/<uuid>.<ext>` — generated server-side from the file extension of `fileName`.
+- **Verification:** The `/uploads/complete` endpoint calls a HEAD request on the S3 object to confirm the upload succeeded before creating the database record. If the object is not found, the request returns `400 Bad Request`.
+- **Presigned GET URLs:** When you retrieve a listing or its images via the listings endpoints, the API automatically generates presigned GET URLs so images can be displayed in the browser.

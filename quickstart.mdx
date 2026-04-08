@@ -1,80 +1,232 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Run the full CampusHub stack locally using Docker, Go, and Node.js."
+keywords: ["campushub", "local setup", "docker", "go", "node", "quickstart"]
 ---
 
-## Get started in three steps
+This guide walks you through running CampusHub on your local machine. You will start the infrastructure with Docker, apply database migrations, configure both backend and frontend environments, and launch all three backend services alongside the React dev server.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  All backend commands are run from inside the `backend/` directory unless otherwise noted. All frontend commands are run from inside the `frontend/` directory.
+</Note>
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Before starting, ensure the following tools are installed:
 
-### Step 2: Deploy your changes
+| Tool | Minimum version | Purpose |
+|---|---|---|
+| Docker + Docker Compose | latest | PostgreSQL and MinIO |
+| Go | 1.21+ | Backend services |
+| Node.js | 18+ | Frontend dev server |
+| npm | bundled with Node.js | Package management |
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Start Docker services">
+    From the `backend/build` directory, start PostgreSQL and MinIO with Docker Compose:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    cd backend/build
+    docker compose -f docker-compose.dev.yml up -d
+    ```
 
-### Step 3: Go live
+    Verify both containers are running:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```bash
+    docker ps
+    ```
+
+    This starts:
+    - **PostgreSQL 15** on port `5434` (mapped from the container's `5432`)
+    - **MinIO** on port `9000` (S3 API) and port `9001` (web console)
+
+    <Tip>
+      The database name is `campus`, the username is `postgres`, and the password is `postgres`. These match the default `DB_DSN` in the backend README.
+    </Tip>
+  </Step>
+
+  <Step title="Create the MinIO bucket">
+    The backend expects a bucket named `campushub-01-uploads`. Create it through the MinIO console:
+
+    1. Open [http://localhost:9001](http://localhost:9001) in your browser.
+    2. Log in with username `minioadmin` and password `minioadmin`.
+    3. Navigate to **Buckets** and click **Create Bucket**.
+    4. Enter `campushub-01-uploads` as the bucket name and confirm.
+
+    <Warning>
+      The bucket name must match the `S3_BUCKET` value in your `.env` file exactly. The backend will fail to generate presigned URLs if the bucket does not exist.
+    </Warning>
+  </Step>
+
+  <Step title="Run database migrations">
+    Apply all SQL migration files from `backend/build`:
+
+    ```bash
+    cd backend/build
+    cat ../migrations/*.sql | docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d campus -v ON_ERROR_STOP=1 -f -
+    ```
+
+    Verify the tables were created:
+
+    ```bash
+    docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d campus -c "\dt"
+    ```
+
+    <Note>
+      The `-v ON_ERROR_STOP=1` flag causes the migration to halt immediately if any SQL statement fails, preventing partial schema states.
+    </Note>
+  </Step>
+
+  <Step title="Configure the backend environment">
+    Create a `.env` file in the `backend/` directory. Copy the values below and fill in your Gemini API key:
+
+    ```bash
+    ENV=dev
+    PORT=8082
+    WS_PORT=8081
+    DB_DSN=postgres://postgres:postgres@localhost:5434/campus?sslmode=disable
+    JWT_SECRET=supersecret-dev-key
+    GEMINI_API_KEY=your-gemini-api-key-here
+    S3_BUCKET=campushub-01-uploads
+    S3_REGION=us-east-1
+    S3_ENDPOINT=http://localhost:9000
+    S3_PATH_STYLE=true
+    PRESIGN_EXPIRY=15
+    ```
+
+    Key values to note:
+
+    - `PORT=8082` — the REST API server listens here
+    - `WS_PORT=8081` — the WebSocket server listens here
+    - `DB_DSN` uses port `5434`, not `5432`, because Docker maps the container port to `5434`
+    - `S3_ENDPOINT=http://localhost:9000` points to the local MinIO instance
+    - `S3_PATH_STYLE=true` is required for MinIO compatibility
+    - `GEMINI_API_KEY` is optional but required for AI assistant features
+
+    <Tip>
+      You can obtain a Gemini API key from Google AI Studio. Without it, the AI assistant endpoints will not function, but all other marketplace features will work normally.
+    </Tip>
+  </Step>
+
+  <Step title="Start the backend services">
+    CampusHub's backend runs as three separate processes. Open three terminal windows, each in the `backend/` directory.
+
+    <CodeGroup>
+
+    ```bash Terminal 1 — API server
+    cd backend
+    go run cmd/api/main.go
+    ```
+
+    ```bash Terminal 2 — WebSocket server
+    cd backend
+    go run cmd/ws/main.go
+    ```
+
+    ```bash Terminal 3 — Background worker
+    cd backend
+    go run cmd/worker/main.go
+    ```
+
+    </CodeGroup>
+
+    Expected log output from the API server:
+
+    ```
+    {"level":"info","msg":"api listening","addr":":8082"}
+    ```
+
+    Confirm the API server is healthy:
+
+    ```bash
+    curl http://localhost:8082/healthz
+    ```
+
+    The WebSocket server listens on port `8081` and is accessible at `ws://localhost:8081/ws`.
+
+    <Note>
+      The background worker (`cmd/worker`) maintains its own in-memory pub/sub bus. In development, the WebSocket server also runs its own internal agent and chat workers, so `cmd/worker` is an alternative standalone process for processing AI queries outside the WebSocket process.
+    </Note>
+  </Step>
+
+  <Step title="Configure the frontend environment">
+    Create a `.env` file in the `frontend/` directory with your Firebase project credentials and the backend API URLs:
+
+    ```bash
+    VITE_API_URL=http://localhost:8082
+    VITE_WS_URL=ws://localhost:8081
+    VITE_FIREBASE_API_KEY=your-firebase-api-key
+    VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+    VITE_FIREBASE_PROJECT_ID=your-project-id
+    VITE_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
+    VITE_FIREBASE_MESSAGING_SENDER_ID=your-sender-id
+    VITE_FIREBASE_APP_ID=your-app-id
+    ```
+
+    <Warning>
+      Firebase credentials are required for the real-time chat feature. Without them, the frontend will load but chat functionality will be unavailable. Create a Firebase project at the Firebase console and add a web app to obtain these values.
+    </Warning>
+  </Step>
+
+  <Step title="Install frontend dependencies">
+    From the `frontend/` directory, install npm packages:
+
+    ```bash
+    cd frontend
+    npm install
+    ```
+  </Step>
+
+  <Step title="Start the frontend dev server">
+    ```bash
+    npm run dev
+    ```
+
+    The application will be available at [http://localhost:5173](http://localhost:5173).
+
+    <Check>
+      If all services are running, you should be able to register a new account, browse the (empty) listings page, and see the WebSocket connection established in the browser's network tab.
+    </Check>
+  </Step>
+
+</Steps>
+
+## Service summary
+
+| Service | Command | Port |
+|---|---|---|
+| API server | `go run cmd/api/main.go` | `8082` |
+| WebSocket server | `go run cmd/ws/main.go` | `8081` |
+| Background worker | `go run cmd/worker/main.go` | — |
+| Frontend | `npm run dev` | `5173` |
+| PostgreSQL | Docker | `5434` |
+| MinIO S3 API | Docker | `9000` |
+| MinIO console | Docker | `9001` |
+
+## Stopping services
+
+To stop the Docker infrastructure:
+
+```bash
+docker compose -f backend/build/docker-compose.dev.yml down
+```
+
+Stop the Go processes and the Vite dev server with `Ctrl+C` in each terminal.
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Architecture" icon="building" href="/architecture">
+    Learn how the three backend services communicate through the pub/sub system.
+  </Card>
+  <Card title="Environment variables" icon="settings" href="/deployment/environment-variables">
+    Full reference for all backend and frontend configuration variables.
+  </Card>
+  <Card title="Authentication" icon="lock" href="/features/authentication">
+    Understand the JWT-based auth flow and role system.
+  </Card>
+  <Card title="AWS deployment" icon="cloud" href="/deployment/aws-deployment">
+    Deploy CampusHub to AWS EC2 with a load balancer.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

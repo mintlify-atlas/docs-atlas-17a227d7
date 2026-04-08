@@ -1,0 +1,91 @@
+---
+title: "Introduction"
+description: "CampusHub is a campus-only marketplace for SJSU students to buy, sell, and connect in real time."
+keywords: ["campushub", "campus marketplace", "sjsu", "student marketplace"]
+---
+
+CampusHub is a full-stack campus marketplace built exclusively for San Jose State University students. It provides a trusted space where students can list items for sale, browse what others are offering, negotiate through real-time chat, and get AI-powered assistance — all within a single platform.
+
+## Who it's for
+
+CampusHub is designed for three types of users on campus:
+
+- **Buyers** — SJSU students who want to find used textbooks, electronics, furniture, and other items from fellow students at fair prices.
+- **Sellers** — Students looking to offload belongings before moving, after a semester, or whenever they have something to offer.
+- **Admins** — Platform moderators who manage listings, resolve reports, and maintain community standards across the marketplace.
+
+## Key features
+
+**User authentication**
+
+Secure JWT-based sign-up and sign-in with profile management. Role-based access control distinguishes buyers, sellers, and admins.
+
+**Marketplace listings**
+
+Browse and search listings filtered by category, price range, and condition. Sellers can create listings with multiple image uploads. Anyone can view detailed listing information including seller contact details.
+
+**Real-time chat**
+
+Buyer-seller messaging powered by Firebase Firestore with live synchronization. Buyers can open a chat thread directly from any listing page.
+
+**AI assistant**
+
+An AI-powered chatbot backed by Google Gemini 2.5 Flash helps users find items on the marketplace. The assistant understands natural language queries and returns relevant listing results alongside a conversational answer.
+
+**Image management**
+
+Images are stored in AWS S3 (or MinIO for local development). The backend generates presigned URLs for direct browser-to-storage uploads, keeping the API server out of the upload path. Each listing supports multiple images.
+
+**Real-time notifications**
+
+A dedicated WebSocket server delivers live notifications and chat updates to connected clients. The server uses Gorilla WebSocket with a hub pattern to manage concurrent connections.
+
+**Admin dashboard**
+
+Admins have access to platform analytics, a full user list, the ability to force-remove listings, and a report queue for handling moderation requests submitted by users.
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| API server | Go 1.21+, Gin, pgx |
+| WebSocket server | Go, Gorilla WebSocket |
+| Background worker | Go, in-memory pub/sub |
+| Frontend | React 19, Vite 7, Tailwind CSS 3 |
+| Database | PostgreSQL 15 (Aurora in production) |
+| Object storage | AWS S3 / MinIO |
+| Real-time chat | Firebase Firestore |
+| AI integration | Google Gemini 2.5 Flash |
+| Containerization | Docker, Docker Compose |
+| Deployment | AWS EC2 with Load Balancer |
+
+## User roles
+
+<AccordionGroup>
+  <Accordion title="Buyer">
+    Buyers can browse and search the full listing catalog, view individual listings, contact sellers via chat, use the AI assistant, and submit reports on problematic listings. Buyers can also create their own listings when they want to sell something.
+  </Accordion>
+  <Accordion title="Seller">
+    Sellers create and manage listings, upload images, mark items as sold, and communicate with interested buyers through the real-time chat system. Sellers share the same authentication flow as buyers — any authenticated user can post a listing.
+  </Accordion>
+  <Accordion title="Admin">
+    Admins have elevated access across the platform. They can view platform metrics, manage all users, force-remove any listing, and process the report queue. Admin routes are protected by role-based JWT middleware and are inaccessible to standard users.
+  </Accordion>
+</AccordionGroup>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get the full stack running locally in minutes with Docker, Go, and Node.js.
+  </Card>
+  <Card title="Architecture" icon="building" href="/architecture">
+    Understand how the API server, WebSocket server, worker, and frontend fit together.
+  </Card>
+  <Card title="Marketplace features" icon="store" href="/features/marketplace">
+    Learn about listing creation, image uploads, search, and filtering.
+  </Card>
+  <Card title="Chat and AI" icon="message-circle" href="/features/chat-and-ai">
+    Explore the Firebase chat integration and Gemini AI assistant.
+  </Card>
+</CardGroup>

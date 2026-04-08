@@ -1,0 +1,120 @@
+---
+title: 'API overview'
+description: 'Base URLs, authentication, response format, and endpoint groups for the CampusHub API.'
+keywords: ['api', 'overview', 'base url', 'authentication', 'response format']
+---
+
+## Base URL
+
+All REST endpoints are prefixed with `/v1`.
+
+| Environment | Base URL |
+|---|---|
+| Development | `http://localhost:8082/v1` |
+| Production | `https://<your-alb-dns>/v1` |
+
+## Health check
+
+```bash
+GET /healthz
+```
+
+Returns a `200 OK` with the plain-text body `ok`. No authentication is required. Use this endpoint to verify the server is running before making other requests.
+
+## Authentication
+
+Protected routes require a JWT Bearer token in the `Authorization` header:
+
+```
+Authorization: Bearer <JWT>
+```
+
+Obtain a token by signing in via [POST /v1/auth/sign-in](/api/authentication). Tokens are stateless JWTs signed with `JWT_SECRET`.
+
+| HTTP status | Cause |
+|---|---|
+| `401 Unauthorized` | Token is missing, malformed, or expired |
+| `403 Forbidden` | Token is valid but the account role is insufficient |
+
+## Content-Type
+
+All request bodies must be JSON. All responses are JSON.
+
+```
+Content-Type: application/json
+```
+
+## Response format
+
+Every response is wrapped in a top-level `data` or `error` key.
+
+**Success**
+
+```json
+{
+  "data": { ... }
+}
+```
+
+**Error**
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "invalid fields",
+    "detail": "Key: 'Price' Error:Field validation for 'Price' failed on the 'gte' tag"
+  }
+}
+```
+
+## Roles and permissions
+
+CampusHub uses role-based access control. Every user account is assigned one of three roles at registration.
+
+| Role | Description |
+|---|---|
+| `buyer` | Can browse, create reports, and manage their own listings |
+| `seller` | Same permissions as buyer |
+| `admin` | Full access including user management and report moderation |
+
+| Endpoint | Public | buyer / seller / admin | admin only |
+|---|---|---|---|
+| `GET /listings` | Yes | — | — |
+| `GET /listings/:id` | Yes | — | — |
+| `POST /listings` | — | Yes | — |
+| `PATCH /listings/:id` | — | Yes | — |
+| `POST /listings/:id/mark-sold` | — | Yes | — |
+| `DELETE /listings/:id` | — | Yes | — |
+| `GET /listings/mine` | — | Yes | — |
+| `POST /uploads/presign` | — | Yes | — |
+| `POST /uploads/complete` | — | Yes | — |
+| `POST /reports` | — | Yes | — |
+| `GET /reports` | — | — | Yes |
+| `PATCH /reports/:id/status` | — | — | Yes |
+| `GET /admin/metrics` | — | — | Yes |
+| `GET /admin/users` | — | — | Yes |
+| `POST /admin/listings/:id/remove` | — | — | Yes |
+
+## Endpoint groups
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="lock" href="/api/authentication">
+    Sign up and sign in to obtain a JWT token.
+  </Card>
+  <Card title="Listings" icon="tag" href="/api/listings">
+    Create, browse, update, and delete marketplace listings.
+  </Card>
+  <Card title="Image uploads" icon="image" href="/api/uploads">
+    Upload listing images via a three-step presigned URL flow.
+  </Card>
+  <Card title="Reports" icon="flag" href="/api/reports">
+    Report inappropriate listings; admins review and resolve.
+  </Card>
+  <Card title="Admin" icon="shield" href="/api/admin">
+    Platform metrics, user management, and force-removal tools.
+  </Card>
+  <Card title="WebSocket API" icon="bolt" href="/api/websocket">
+    Real-time AI-powered search assistant over WebSocket.
+  </Card>
+</CardGroup>

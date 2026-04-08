@@ -1,0 +1,234 @@
+---
+title: "Architecture"
+description: "How CampusHub's API server, WebSocket server, background worker, and React frontend fit together."
+keywords: ["campushub", "architecture", "microservices", "websocket", "pub/sub", "go", "react"]
+---
+
+CampusHub uses a microservices design where three independent Go processes handle distinct concerns: REST API requests, real-time WebSocket connections, and background AI processing. The React frontend communicates with all three. Infrastructure is provided by PostgreSQL for relational data, MinIO (or AWS S3) for object storage, and Firebase Firestore for real-time chat persistence.
+
+## System overview
+
+```
+                         ┌─────────────────────────────────┐
+                         │        React + Vite              │
+                         │        localhost:5173            │
+                         └────┬──────────┬──────────────────┘
+                              │ HTTP/REST │ WebSocket
+                              │          │
+               ┌──────────────▼──┐   ┌───▼──────────────────┐
+               │   API Server    │   │  WebSocket Server     │
+               │  cmd/api        │   │  cmd/ws               │
+               │  :8082          │   │  :8081                │
+               └──────┬──────────┘   └───┬──────────────────┘
+                      │                  │
+                      │ pgx pool         │ in-memory pub/sub
+                      │                  │ (agent.request /
+                      ▼                  │  agent.response /
+               ┌─────────────┐           │  chat.request /
+               │ PostgreSQL  │           │  chat.response)
+               │ :5434       │           │
+               └─────────────┘      ┌───▼──────────────────┐
+                                    │  Background Worker    │
+               ┌─────────────┐      │  cmd/worker           │
+               │ MinIO / S3  │      │  Gemini AI            │
+               │ :9000       │      └───────────────────────┘
+               └─────────────┘
+               ┌─────────────┐
+               │  Firebase   │
+               │  Firestore  │
+               └─────────────┘
+```
+
+## Services
+
+### API server (`cmd/api`, port 8082)
+
+The API server is a Gin HTTP server that handles all REST endpoints. It is the primary entry point for the frontend's data operations.
+
+**Responsibilities:**
+- User authentication (sign-up, sign-in, JWT issuance)
+- Listing CRUD (create, read, update, delete, mark sold)
+- Presigned URL generation for image uploads to MinIO/S3
+- Report submission and management
+- Admin operations (metrics, user list, force-remove listing)
+
+**Key dependencies:**
+- `github.com/gin-gonic/gin` — HTTP routing and middleware
+- `github.com/jackc/pgx/v5` — PostgreSQL connection pool
+- `github.com/aws/aws-sdk-go-v2/service/s3` — S3/MinIO presigned URLs
+- `github.com/golang-jwt/jwt/v5` — JWT signing and validation
+- `go.uber.org/zap` — structured logging
+
+**Route groups:**
+
+All routes are mounted under `/v1`. Public routes require no token; protected routes use JWT middleware with role enforcement.
+
+| Method | Path | Auth | Roles |
+|---|---|---|---|
+| `POST` | `/v1/auth/sign-up` | Public | — |
+| `POST` | `/v1/auth/sign-in` | Public | — |
+| `GET` | `/v1/listings` | Public | — |
+| `GET` | `/v1/listings/:id` | Public | — |
+| `POST` | `/v1/listings` | JWT | buyer, seller, admin |
+| `PATCH` | `/v1/listings/:id` | JWT | buyer, seller, admin |
+| `POST` | `/v1/listings/:id/mark-sold` | JWT | buyer, seller, admin |
+| `DELETE` | `/v1/listings/:id` | JWT | buyer, seller, admin |
+| `GET` | `/v1/listings/mine` | JWT | buyer, seller, admin |
+| `POST` | `/v1/uploads/presign` | JWT | buyer, seller, admin |
+| `POST` | `/v1/uploads/complete` | JWT | buyer, seller, admin |
+| `POST` | `/v1/reports` | JWT | buyer, seller, admin |
+| `GET` | `/v1/reports` | JWT | admin |
+| `PATCH` | `/v1/reports/:id/status` | JWT | admin |
+| `GET` | `/v1/admin/metrics` | JWT | admin |
+| `GET` | `/v1/admin/users` | JWT | admin |
+| `POST` | `/v1/admin/listings/:id/remove` | JWT | admin |
+
+**Graceful shutdown:** The server listens for `SIGINT` and `SIGTERM` and performs a 10-second graceful drain before closing.
+
+---
+
+### WebSocket server (`cmd/ws`, port 8081)
+
+The WebSocket server manages persistent client connections and orchestrates real-time message delivery. It uses Gorilla WebSocket and implements a hub pattern where a central `Hub` struct tracks all active clients.
+
+**Responsibilities:**
+- Upgrade HTTP connections to WebSocket (`/ws` endpoint)
+- Authenticate connections via a JWT passed as a query parameter (`?token=...`)
+- Route inbound messages from clients to the correct pub/sub topic
+- Deliver outbound messages from pub/sub to the appropriate connected client
+- Run internal agent and chat workers that process AI queries
+
+**Hub pattern:**
+
+The `Hub` holds a registry of connected `Client` structs. Each client runs two goroutines: `ReadPump` (receives messages from the browser) and `WritePump` (sends messages to the browser). The hub decouples clients from each other — a message destined for a specific user is matched by `userID` extracted from the JWT claims.
+
+**Authentication flow:**
+
+```
+Browser → ws://localhost:8081/ws?token=<JWT>
+            ↓
+        serveWs() validates JWT
+            ↓
+        Client registered with Hub (userID, role)
+```
+
+**Internal pub/sub topics:**
+
+| Topic | Publisher | Subscriber | Purpose |
+|---|---|---|---|
+| `agent.request` | Hub (from client message) | `startAgentWorker` | AI marketplace search query |
+| `agent.response` | `handleAgentRequest` | Hub | AI answer + listing results |
+| `chat.request` | Hub (from client message) | `startChatWorker` | General AI chat message |
+| `chat.response` | `handleChatRequest` | Hub | AI chat reply |
+
+---
+
+### Background worker (`cmd/worker`)
+
+The background worker is a standalone Go process that subscribes to the `agent.request` pub/sub topic and processes AI queries using the Gemini API. In development the WebSocket server hosts its own equivalent workers internally, making `cmd/worker` an independently scalable alternative.
+
+**Responsibilities:**
+- Connect to PostgreSQL to query listing data
+- Subscribe to `agent.request` on the in-memory bus
+- Call `AgentService.ProcessQuery` for each message, which queries Gemini and performs a listing search
+- Publish results to `agent.response`
+
+<Note>
+  The in-memory pub/sub bus (`internal/pubsub`) is local to each process. In a production deployment, this would be replaced by an external broker such as Redis Pub/Sub or NATS so that `cmd/worker` and `cmd/ws` share the same message bus. The codebase is structured to make this substitution straightforward.
+</Note>
+
+---
+
+### Frontend (`frontend/`, port 5173)
+
+The frontend is a single-page application built with React 19 and Vite 7. It communicates with the backend over HTTP for data operations and over WebSocket for real-time features.
+
+**Key libraries:**
+
+| Package | Purpose |
+|---|---|
+| `react-router-dom` v7 | Client-side routing |
+| `axios` | HTTP requests to the API server |
+| `firebase` | Firebase SDK for Firestore chat |
+| `tailwindcss` | Utility-first CSS |
+| `lucide-react` | Icon library |
+| `react-hot-toast` | Toast notifications |
+
+**Environment variables:**
+
+The frontend reads `VITE_API_URL` and `VITE_WS_URL` at build time to configure its HTTP and WebSocket clients. All Firebase credentials are also provided through `.env` variables prefixed with `VITE_FIREBASE_`.
+
+---
+
+## Infrastructure
+
+### PostgreSQL (port 5434)
+
+PostgreSQL 15 stores all relational data: users, listings, listing images, reports, and admin records. The backend uses `pgx/v5` with a connection pool. In local development, Docker maps the container's port `5432` to host port `5434` to avoid conflicts with any locally installed PostgreSQL instance.
+
+The database is named `campus`. Schemas are applied by running the SQL files in `backend/migrations/` sequentially via `psql`.
+
+### MinIO / AWS S3 (port 9000)
+
+Object storage holds listing images. The API server generates short-lived presigned PUT URLs (configurable via `PRESIGN_EXPIRY`, default 15 minutes) that the browser uses to upload images directly, bypassing the API server entirely. After upload, the browser calls `/v1/uploads/complete` to record the image URL in PostgreSQL.
+
+MinIO is a self-hosted S3-compatible store used in local development. The `S3_PATH_STYLE=true` configuration is required for MinIO but should be set to `false` when using real AWS S3 in production.
+
+### Firebase Firestore
+
+Chat messages between buyers and sellers are stored and synchronized through Firebase Firestore. The frontend uses the Firebase JS SDK directly — the Go backend is not involved in the chat data path. Firestore's real-time listeners handle message delivery without any polling.
+
+---
+
+## Pub/Sub architecture
+
+The pub/sub system (`internal/pubsub`) is a lightweight in-memory message bus built on Go channels. It supports multiple subscribers per topic and fan-out delivery.
+
+```go
+// Topics used in development
+"agent.request"   // Client sends a marketplace AI search query
+"agent.response"  // Worker sends back answer + listing results
+"chat.request"    // Client sends a general chat message
+"chat.response"   // Worker sends back a chat reply
+```
+
+The `Bus` type is created once per process and passed to both the `Hub` and the worker goroutines. This means the pub/sub is shared within a single process but not across processes. The WebSocket server (`cmd/ws`) runs its own workers co-located with the hub, which is the default development configuration.
+
+---
+
+## AI request data flow
+
+The following describes the complete path of an AI marketplace search query from the browser to the response:
+
+1. **Browser** — User types a query in the AI assistant UI. The frontend sends a WebSocket message of type `agent_request` to `ws://localhost:8081/ws?token=<JWT>`.
+
+2. **WebSocket server** — The client's `ReadPump` receives the message. The hub identifies the message type and publishes a `pubsub.AgentRequest` to the `agent.request` topic.
+
+3. **Agent worker** — `startAgentWorker` is subscribed to `agent.request`. It picks up the message and calls `AgentService.ProcessQuery(ctx, query)` in a goroutine.
+
+4. **AgentService** — The service sends the query to the Gemini API with context about available listings retrieved from PostgreSQL. Gemini returns a natural-language answer and any relevant listing IDs.
+
+5. **Response** — `ProcessQuery` returns the answer and a `[]ListingInfo` slice. The worker publishes a `pubsub.AgentResponse` to the `agent.response` topic.
+
+6. **WebSocket server** — The hub is subscribed to `agent.response`. It looks up the connected client by `UserID` and sends the answer and listing results over the WebSocket connection.
+
+7. **Browser** — The frontend receives the `agent_response` message, renders the AI answer, and displays the matching listings inline.
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Marketplace features" icon="store" href="/features/marketplace">
+    Learn about listing creation, filtering, and presigned image uploads.
+  </Card>
+  <Card title="Chat and AI" icon="message-circle" href="/features/chat-and-ai">
+    Dive into the Firebase chat integration and Gemini AI assistant flow.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/overview">
+    Full reference for every REST endpoint exposed by the API server.
+  </Card>
+  <Card title="WebSocket reference" icon="zap" href="/api/websocket">
+    Message types, authentication, and connection lifecycle for the WebSocket server.
+  </Card>
+</CardGroup>

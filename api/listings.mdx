@@ -1,0 +1,394 @@
+---
+title: 'Listings'
+description: 'Create, browse, update, mark as sold, and delete marketplace listings on CampusHub.'
+keywords: ['listings', 'marketplace', 'create listing', 'search listings', 'campus marketplace']
+---
+
+Listings are the core resource of the CampusHub marketplace. Each listing belongs to a seller and can be in one of three statuses: `active`, `sold`, or `removed`.
+
+**Condition values:** `New`, `LikeNew`, `Good`, `Fair`
+
+**Status values:** `active`, `sold`, `removed`
+
+---
+
+## List listings
+
+Browse all active listings. No authentication required.
+
+```
+GET /v1/listings
+```
+
+### Query parameters
+
+<ParamField query="category" type="string">
+  Filter by category, e.g. `Textbooks`, `Electronics`, `Furniture`.
+</ParamField>
+
+<ParamField query="status" type="string" default="active">
+  Filter by listing status. One of: `active`, `sold`, `removed`. Defaults to `active`.
+</ParamField>
+
+<ParamField query="q" type="string">
+  Full-text keyword search across title and description.
+</ParamField>
+
+<ParamField query="sort" type="string" default="created_desc">
+  Sort order. One of: `created_desc`, `price_asc`, `price_desc`.
+</ParamField>
+
+<ParamField query="priceMin" type="number">
+  Return only listings with `price >= priceMin`.
+</ParamField>
+
+<ParamField query="priceMax" type="number">
+  Return only listings with `price <= priceMax`.
+</ParamField>
+
+<ParamField query="limit" type="number" default="20">
+  Maximum number of results to return. Between 1 and 100.
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of results to skip for pagination.
+</ParamField>
+
+### Response
+
+<ResponseField name="data" type="object">
+  <Expandable title="properties">
+    <ResponseField name="items" type="object[]">
+      Array of listing objects, each with an inline `images` array of presigned URLs.
+    </ResponseField>
+    <ResponseField name="total" type="number">
+      Total number of listings matching the query (before pagination).
+    </ResponseField>
+    <ResponseField name="limit" type="number">
+      The limit value used for this response.
+    </ResponseField>
+    <ResponseField name="offset" type="number">
+      The offset value used for this response.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://localhost:8082/v1/listings?category=Textbooks&sort=price_asc&limit=5"
+```
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "sellerId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "title": "CMPE 202 Textbook",
+        "description": "Lightly used, pickup at library",
+        "category": "Textbooks",
+        "price": 35.00,
+        "condition": "Good",
+        "status": "active",
+        "createdAt": "2025-10-29T22:41:17Z",
+        "updatedAt": "2025-10-29T22:41:17Z",
+        "images": [
+          {
+            "key": "uploads/2025/10/uuid.jpg",
+            "url": "https://s3...signed-get..."
+          }
+        ]
+      }
+    ],
+    "total": 1,
+    "limit": 5,
+    "offset": 0
+  }
+}
+```
+
+---
+
+## Get a listing
+
+Retrieve a single listing by ID. No authentication required.
+
+```
+GET /v1/listings/:id
+```
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the listing.
+</ParamField>
+
+### Response
+
+Returns the listing object with its `images` array. Returns `404 Not Found` if the listing does not exist.
+
+<ResponseField name="data" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">UUID of the listing.</ResponseField>
+    <ResponseField name="sellerId" type="string">UUID of the seller.</ResponseField>
+    <ResponseField name="title" type="string">Listing title.</ResponseField>
+    <ResponseField name="description" type="string">Listing description.</ResponseField>
+    <ResponseField name="category" type="string">Category, e.g. `Textbooks`.</ResponseField>
+    <ResponseField name="price" type="number">Asking price in USD.</ResponseField>
+    <ResponseField name="condition" type="string">One of: `New`, `LikeNew`, `Good`, `Fair`.</ResponseField>
+    <ResponseField name="status" type="string">One of: `active`, `sold`, `removed`.</ResponseField>
+    <ResponseField name="createdAt" type="string">ISO 8601 creation timestamp.</ResponseField>
+    <ResponseField name="updatedAt" type="string">ISO 8601 last-updated timestamp.</ResponseField>
+    <ResponseField name="images" type="object[]">
+      Array of image objects with `key` (S3 object key) and `url` (presigned GET URL).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl http://localhost:8082/v1/listings/11111111-1111-1111-1111-111111111111
+```
+
+---
+
+## Create a listing
+
+Create a new marketplace listing. Requires authentication.
+
+```
+POST /v1/listings
+```
+
+**Required roles:** `buyer`, `seller`, `admin`
+
+### Request body
+
+<ParamField body="sellerId" type="string" required>
+  UUID of the seller creating this listing. Must match the authenticated user's ID.
+</ParamField>
+
+<ParamField body="title" type="string" required>
+  Title of the listing. Between 3 and 120 characters.
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Detailed description. Minimum 5 characters.
+</ParamField>
+
+<ParamField body="category" type="string" required>
+  Category name. Between 2 and 60 characters, e.g. `Textbooks`, `Electronics`, `Furniture`.
+</ParamField>
+
+<ParamField body="price" type="number" required>
+  Asking price in USD. Must be greater than or equal to 0.
+</ParamField>
+
+<ParamField body="condition" type="string" required>
+  Physical condition. One of: `New`, `LikeNew`, `Good`, `Fair`.
+</ParamField>
+
+### Response
+
+Returns `201 Created` with the new listing object.
+
+### Example
+
+```bash
+curl -X POST http://localhost:8082/v1/listings \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sellerId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "title": "CMPE 202 Textbook",
+    "description": "Lightly used, pickup at library",
+    "category": "Textbooks",
+    "price": 35.00,
+    "condition": "Good"
+  }'
+```
+
+```json
+{
+  "data": {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "sellerId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "title": "CMPE 202 Textbook",
+    "description": "Lightly used, pickup at library",
+    "category": "Textbooks",
+    "price": 35.00,
+    "condition": "Good",
+    "status": "active",
+    "createdAt": "2025-10-29T22:41:17Z",
+    "updatedAt": "2025-10-29T22:41:17Z"
+  }
+}
+```
+
+---
+
+## Update a listing
+
+Partially update an existing listing. Only provide the fields you want to change. Requires authentication.
+
+```
+PATCH /v1/listings/:id
+```
+
+**Required roles:** `buyer`, `seller`, `admin`
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the listing to update.
+</ParamField>
+
+### Request body
+
+All fields are optional. Only the provided fields are updated.
+
+<ParamField body="title" type="string">
+  Updated title.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description.
+</ParamField>
+
+<ParamField body="category" type="string">
+  Updated category.
+</ParamField>
+
+<ParamField body="price" type="number">
+  Updated asking price. Must be greater than or equal to 0.
+</ParamField>
+
+<ParamField body="condition" type="string">
+  Updated condition. One of: `New`, `LikeNew`, `Good`, `Fair`.
+</ParamField>
+
+<ParamField body="status" type="string">
+  Updated status. One of: `active`, `sold`, `removed`.
+</ParamField>
+
+### Response
+
+Returns `200 OK` with the updated listing object.
+
+### Example
+
+```bash
+curl -X PATCH http://localhost:8082/v1/listings/11111111-1111-1111-1111-111111111111 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"price": 30.00, "title": "CMPE 202 Textbook (Updated)"}'
+```
+
+---
+
+## Mark a listing as sold
+
+Set a listing's status to `sold`. Requires authentication.
+
+```
+POST /v1/listings/:id/mark-sold
+```
+
+**Required roles:** `buyer`, `seller`, `admin`
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the listing to mark as sold.
+</ParamField>
+
+### Response
+
+Returns `200 OK` with `{ "data": { "ok": true } }`.
+
+### Example
+
+```bash
+curl -X POST http://localhost:8082/v1/listings/11111111-1111-1111-1111-111111111111/mark-sold \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Delete a listing
+
+Soft-delete a listing by setting its status to `removed`. The record is retained in the database. Requires authentication.
+
+```
+DELETE /v1/listings/:id
+```
+
+**Required roles:** `buyer`, `seller`, `admin`
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the listing to delete.
+</ParamField>
+
+### Response
+
+Returns `200 OK` with `{ "data": { "ok": true } }`.
+
+### Example
+
+```bash
+curl -X DELETE http://localhost:8082/v1/listings/11111111-1111-1111-1111-111111111111 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Get my listings
+
+Return all listings belonging to the authenticated user. Requires authentication.
+
+```
+GET /v1/listings/mine
+```
+
+**Required roles:** `buyer`, `seller`, `admin`
+
+### Query parameters
+
+<ParamField query="sort" type="string" default="created_desc">
+  Sort order. One of: `created_desc`, `price_asc`, `price_desc`.
+</ParamField>
+
+<ParamField query="priceMin" type="number">
+  Filter to listings priced at or above this value.
+</ParamField>
+
+<ParamField query="priceMax" type="number">
+  Filter to listings priced at or below this value.
+</ParamField>
+
+<ParamField query="limit" type="number" default="20">
+  Maximum number of results. Between 1 and 100.
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of results to skip for pagination.
+</ParamField>
+
+### Response
+
+Returns a paginated list of the caller's listings, each including presigned image URLs.
+
+### Example
+
+```bash
+curl http://localhost:8082/v1/listings/mine \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+
+```

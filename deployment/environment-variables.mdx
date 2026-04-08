@@ -1,0 +1,116 @@
+---
+title: "Environment Variables"
+description: "Reference for all environment variables required by the CampusHub backend and frontend."
+keywords: ["environment variables", "configuration", "env", "dotenv"]
+---
+
+CampusHub requires two `.env` files: one for the backend Go services and one for the React frontend. Neither file should ever be committed to version control.
+
+<Warning>
+  Never commit `.env` files to git. Both files contain secrets such as JWT signing keys, API keys, and Firebase credentials. Add `.env` to your `.gitignore` and use `.env.example` as a committed template with placeholder values.
+</Warning>
+
+<Tip>
+  Copy `backend/.env.example` to `backend/.env` as a starting point, then fill in each value. The example file ships with safe placeholder defaults for non-secret variables.
+</Tip>
+
+<Tabs>
+  <Tab title="Backend">
+    Create `backend/.env` before starting any of the three backend processes (API server, WebSocket server, Worker). All three processes read from the same file.
+
+    ```env backend/.env
+    ENV=dev
+    PORT=8082
+    WS_PORT=8081
+    DB_DSN=postgres://postgres:postgres@localhost:5434/campus?sslmode=disable
+    JWT_SECRET=supersecret-dev-key
+    GEMINI_API_KEY=your-gemini-api-key-here
+    S3_BUCKET=campushub-01-uploads
+    S3_REGION=us-east-1
+    S3_ENDPOINT=http://localhost:9000
+    S3_PATH_STYLE=true
+    PRESIGN_EXPIRY=15
+    ```
+
+    ### Variable reference
+
+    | Variable | Description | Example value | Required |
+    |----------|-------------|---------------|----------|
+    | `ENV` | Runtime environment. Controls logging format and behavior. | `dev` | Yes |
+    | `PORT` | TCP port for the REST API server. | `8082` | Yes |
+    | `WS_PORT` | TCP port for the WebSocket server. | `8081` | Yes |
+    | `DB_DSN` | PostgreSQL connection string. When using Docker Compose locally, the port is `5434`. | `postgres://postgres:postgres@localhost:5434/campus?sslmode=disable` | Yes |
+    | `JWT_SECRET` | Secret key used to sign and verify JWT tokens. Use a long, random string in production. | `supersecret-dev-key` | Yes |
+    | `GEMINI_API_KEY` | Google Gemini API key for the AI chatbot assistant. If omitted, the chatbot falls back to limited functionality. | `AIza...` | No |
+    | `S3_BUCKET` | Name of the S3 (or MinIO) bucket used for file uploads. Must match the bucket you created. | `campushub-01-uploads` | Yes |
+    | `S3_REGION` | AWS region for S3. For MinIO, any valid region string works. | `us-east-1` | Yes |
+    | `S3_ENDPOINT` | Custom S3 endpoint URL. Set to the MinIO address for local development; omit or set to the AWS regional endpoint in production. | `http://localhost:9000` | No |
+    | `S3_PATH_STYLE` | Use path-style S3 URLs (`true`) instead of virtual-hosted-style (`false`). Required for MinIO; set to `false` for AWS S3. | `true` | No |
+    | `PRESIGN_EXPIRY` | Expiry duration in minutes for presigned upload URLs. | `15` | Yes |
+
+    ### Notes on specific variables
+
+    **`ENV`** — Set to `dev` during local development for human-readable logs. Set to `prod` in production to enable structured JSON logging and stricter behavior.
+
+    **`DB_DSN`** — The Docker Compose configuration maps the PostgreSQL container port 5432 to host port `5434`. Always use port `5434` in the DSN when connecting from the host machine. In production with RDS or Aurora, use the standard port `5432` and the cluster endpoint.
+
+    **`JWT_SECRET`** — This is a critical secret. Any bearer token signed with this key can authenticate API requests. Use a cryptographically random value of at least 32 characters in production. Rotate this key if it is ever exposed.
+
+    **`GEMINI_API_KEY`** — Obtain from [Google AI Studio](https://makersuite.google.com/app/apikey). Required by the Worker process for AI-powered chatbot queries. The API server and WebSocket server start normally without it, but chatbot responses will be limited.
+
+    **`S3_ENDPOINT` and `S3_PATH_STYLE`** — These two variables work together. For local development with MinIO, set `S3_ENDPOINT=http://localhost:9000` and `S3_PATH_STYLE=true`. For AWS S3 in production, leave `S3_ENDPOINT` unset (or use the regional endpoint) and set `S3_PATH_STYLE=false` so the AWS SDK uses virtual-hosted-style URLs.
+
+    **`PRESIGN_EXPIRY`** — Controls how long a presigned URL remains valid for client-side uploads. After this window, the client must request a new presigned URL. 15 minutes is a reasonable default.
+  </Tab>
+
+  <Tab title="Frontend">
+    Create `frontend/.env` before running `npm run dev`. Vite exposes only variables prefixed with `VITE_` to the browser bundle.
+
+    ```env frontend/.env
+    VITE_API_URL=http://localhost:8082/v1
+    VITE_WS_URL=ws://localhost:8081
+    VITE_FIREBASE_API_KEY=your-firebase-api-key
+    VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+    VITE_FIREBASE_PROJECT_ID=your-project-id
+    VITE_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
+    VITE_FIREBASE_MESSAGING_SENDER_ID=your-sender-id
+    VITE_FIREBASE_APP_ID=your-app-id
+    ```
+
+    ### Variable reference
+
+    | Variable | Description | Example value | Required |
+    |----------|-------------|---------------|----------|
+    | `VITE_API_URL` | Base URL for REST API requests. Must include `/v1` path prefix. | `http://localhost:8082/v1` | Yes |
+    | `VITE_WS_URL` | WebSocket server URL. Use `ws://` for local, `wss://` in production. | `ws://localhost:8081` | Yes |
+    | `VITE_FIREBASE_API_KEY` | Firebase project API key. Found in Firebase console under Project Settings. | `AIza...` | Yes |
+    | `VITE_FIREBASE_AUTH_DOMAIN` | Firebase Auth domain for your project. | `your-project.firebaseapp.com` | Yes |
+    | `VITE_FIREBASE_PROJECT_ID` | Firebase project ID. | `your-project-id` | Yes |
+    | `VITE_FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name. | `your-project.appspot.com` | Yes |
+    | `VITE_FIREBASE_MESSAGING_SENDER_ID` | Firebase Cloud Messaging sender ID. | `123456789` | Yes |
+    | `VITE_FIREBASE_APP_ID` | Firebase app ID. | `1:123456789:web:abc123` | Yes |
+
+    ### Notes on specific variables
+
+    **`VITE_API_URL`** — All REST API calls are made to this base URL. In production, replace with your ALB or domain URL, for example `https://api.campushub.example.com/v1`.
+
+    **`VITE_WS_URL`** — The WebSocket connection URL for real-time features and the AI chatbot. In production, use `wss://` (WebSocket Secure) to match your HTTPS setup. Example: `wss://api.campushub.example.com`.
+
+    **Firebase variables** — CampusHub uses Firebase Firestore for real-time buyer-seller chat. All `VITE_FIREBASE_*` variables are available from your Firebase project's console under **Project Settings → General → Your apps**. These values are embedded in the browser bundle at build time — treat them as semi-public (Firebase security rules protect your data, not the client config).
+  </Tab>
+</Tabs>
+
+## Secrets summary
+
+The following variables contain secrets and must never be committed to version control or logged:
+
+| Variable | Risk if exposed |
+|----------|----------------|
+| `JWT_SECRET` | Anyone with this key can forge authentication tokens for any user |
+| `GEMINI_API_KEY` | Allows unauthorized use of your Gemini API quota |
+| `VITE_FIREBASE_API_KEY` | Exposes Firebase project access (mitigated by Firebase security rules) |
+| `DB_DSN` | Contains database credentials |
+
+<Tip>
+  Use a secrets manager such as AWS Secrets Manager or HashiCorp Vault for production deployments. Inject secrets as environment variables at runtime rather than storing them in files on the instance.
+</Tip>

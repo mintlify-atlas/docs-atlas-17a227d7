@@ -1,0 +1,271 @@
+---
+title: "Local Setup"
+description: "Set up CampusHub locally for development using Docker, Go, and Node.js."
+keywords: ["local development", "docker", "go", "node", "setup"]
+---
+
+This guide walks you through running CampusHub locally. The stack consists of three Go backend processes, a Vite + React frontend, PostgreSQL (via Docker), and MinIO as a local S3-compatible object store.
+
+## Prerequisites
+
+Ensure the following tools are installed before you begin:
+
+| Tool | Minimum version | Notes |
+|------|-----------------|-------|
+| Docker & Docker Compose | Latest | Runs PostgreSQL and MinIO |
+| Go | 1.21+ | Required for all backend services |
+| Node.js | 18+ | Required for the frontend |
+| npm | Bundled with Node.js | Package manager |
+
+## Setup
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/gopinathsjsu/team-project-cmpe202-03-fall2025-campushub.git
+    cd team-project-cmpe202-03-fall2025-campushub
+    ```
+  </Step>
+
+  <Step title="Start Docker services">
+    From the `backend/build/` directory, start PostgreSQL and MinIO in detached mode:
+
+    ```bash
+    cd backend/build
+    docker compose -f docker-compose.dev.yml up -d
+    ```
+
+    This starts:
+    - **PostgreSQL** on port `5434` (mapped from container port 5432)
+    - **MinIO** S3 API on port `9000`
+    - **MinIO** console on port `9001`
+
+    Verify both containers are running:
+
+    ```bash
+    docker ps
+    ```
+  </Step>
+
+  <Step title="Create the MinIO bucket">
+    CampusHub uses a bucket named `campushub-01-uploads` for file storage. You must create it manually before starting the backend.
+
+    1. Open the MinIO console at [http://localhost:9001](http://localhost:9001)
+    2. Log in with username `minioadmin` and password `minioadmin`
+    3. Navigate to **Buckets** and create a new bucket named `campushub-01-uploads`
+
+    <Note>
+      The bucket name must match the `S3_BUCKET` value in your backend `.env` file exactly.
+    </Note>
+  </Step>
+
+  <Step title="Run database migrations">
+    From the `backend/build/` directory, pipe all migration SQL files into the running PostgreSQL container:
+
+    ```bash
+    cat ../migrations/*.sql | docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d campus -v ON_ERROR_STOP=1 -f -
+    ```
+
+    Verify the tables were created:
+
+    ```bash
+    docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d campus -c "\dt"
+    ```
+  </Step>
+
+  <Step title="Configure the backend environment">
+    Create a `.env` file in the `backend/` directory. You can use `.env.example` as a starting point:
+
+    ```bash
+    cp backend/.env.example backend/.env
+    ```
+
+    Edit `backend/.env` with the following values:
+
+    ```env
+    ENV=dev
+    PORT=8082
+    WS_PORT=8081
+    DB_DSN=postgres://postgres:postgres@localhost:5434/campus?sslmode=disable
+    JWT_SECRET=supersecret-dev-key
+    GEMINI_API_KEY=your-gemini-api-key-here
+    S3_BUCKET=campushub-01-uploads
+    S3_REGION=us-east-1
+    S3_ENDPOINT=http://localhost:9000
+    S3_PATH_STYLE=true
+    PRESIGN_EXPIRY=15
+    ```
+
+    See [Environment Variables](/deployment/environment-variables) for a full description of each variable.
+  </Step>
+
+  <Step title="Start the three backend processes">
+    CampusHub's backend consists of three separate processes. Open three terminal windows and run one command in each from the `backend/` directory.
+
+    <CodeGroup>
+
+    ```bash API server (port 8082)
+    cd backend
+    go run cmd/api/main.go
+    ```
+
+    ```bash WebSocket server (port 8081)
+    cd backend
+    go run cmd/ws/main.go
+    ```
+
+    ```bash Worker
+    cd backend
+    go run cmd/worker/main.go
+    ```
+
+    </CodeGroup>
+
+    Expected log output from the API server once it is ready:
+
+    ```
+    {"level":"info","msg":"api listening","addr":":8082"}
+    ```
+
+    <Note>
+      The Worker process has no HTTP port — it subscribes to the internal pub/sub bus and processes AI chatbot queries from the WebSocket server.
+    </Note>
+  </Step>
+
+  <Step title="Install frontend dependencies">
+    ```bash
+    cd frontend
+    npm install
+    ```
+  </Step>
+
+  <Step title="Configure the frontend environment">
+    Create a `.env` file in the `frontend/` directory:
+
+    ```env
+    VITE_API_URL=http://localhost:8082/v1
+    VITE_WS_URL=ws://localhost:8081
+    VITE_FIREBASE_API_KEY=your-firebase-api-key
+    VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+    VITE_FIREBASE_PROJECT_ID=your-project-id
+    VITE_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
+    VITE_FIREBASE_MESSAGING_SENDER_ID=your-sender-id
+    VITE_FIREBASE_APP_ID=your-app-id
+    ```
+
+    See [Environment Variables](/deployment/environment-variables) for details on each variable.
+  </Step>
+
+  <Step title="Start the frontend development server">
+    ```bash
+    cd frontend
+    npm run dev
+    ```
+
+    The application is available at [http://localhost:5173](http://localhost:5173).
+  </Step>
+</Steps>
+
+## Convenience scripts
+
+The repository includes `start-all.sh` and `stop-all.sh` scripts at the root level that automate the steps above. These scripts check prerequisites, start Docker services, apply migrations if needed, and launch all three backend processes plus the frontend in the background.
+
+```bash
+# Start everything
+./start-all.sh
+
+# Stop background processes (Docker services remain running)
+./stop-all.sh
+```
+
+<Note>
+  The convenience scripts use `make run-api`, `make run-ws`, and `make run-worker` targets defined in `backend/Makefile`, and log output to `/tmp/campushub-*.log`.
+</Note>
+
+## Stopping services
+
+To stop only the Docker containers:
+
+```bash
+cd backend/build
+docker compose -f docker-compose.dev.yml down
+```
+
+To stop Docker containers and remove volumes (deletes all database and MinIO data):
+
+```bash
+docker compose -f docker-compose.dev.yml down -v
+```
+
+## Health check
+
+Once the API server is running, verify it is healthy:
+
+```bash
+curl http://localhost:8082/healthz
+```
+
+A `200 OK` response confirms the API server is up and connected to the database.
+
+## Service URLs at a glance
+
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:5173 |
+| API server | http://localhost:8082 |
+| WebSocket server | ws://localhost:8081 |
+| MinIO console | http://localhost:9001 |
+| PostgreSQL | localhost:5434 |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Database connection failed">
+    The most common cause is using the wrong port. Docker maps PostgreSQL to `5434`, not the default `5432`. Confirm your `DB_DSN` in `backend/.env` uses port `5434`:
+
+    ```env
+    DB_DSN=postgres://postgres:postgres@localhost:5434/campus?sslmode=disable
+    ```
+
+    Also confirm the `db` container is running with `docker ps`.
+  </Accordion>
+
+  <Accordion title="Port already in use">
+    If a port is already occupied, identify and stop the conflicting process:
+
+    ```bash
+    # Find what is using port 8082
+    lsof -i :8082
+
+    # Or on Linux
+    ss -tlnp | grep 8082
+    ```
+
+    Common conflicts: another Go process left running from a previous session, or another PostgreSQL instance on port 5434.
+  </Accordion>
+
+  <Accordion title="MinIO bucket missing (upload errors)">
+    If file uploads fail with an error such as `NoSuchBucket`, the `campushub-01-uploads` bucket has not been created. Log in to [http://localhost:9001](http://localhost:9001) with `minioadmin` / `minioadmin` and create the bucket, then restart the API server.
+  </Accordion>
+
+  <Accordion title="Migration errors">
+    If the migration command fails, check whether the database is reachable:
+
+    ```bash
+    docker compose -f docker-compose.dev.yml exec -T db psql -U postgres -d campus -c "SELECT 1"
+    ```
+
+    If the `campus` database does not exist, it should be created automatically by the Docker image using the `POSTGRES_DB=campus` environment variable. You may need to recreate the container:
+
+    ```bash
+    docker compose -f docker-compose.dev.yml down -v
+    docker compose -f docker-compose.dev.yml up -d
+    ```
+
+    Then re-run the migration command.
+  </Accordion>
+
+  <Accordion title="AI chatbot not responding">
+    The Worker process requires `GEMINI_API_KEY` to be set in `backend/.env`. If the key is missing or empty, the chatbot falls back to limited functionality. Obtain a key from [Google AI Studio](https://makersuite.google.com/app/apikey) and add it to your `.env` file, then restart the Worker.
+  </Accordion>
+</AccordionGroup>

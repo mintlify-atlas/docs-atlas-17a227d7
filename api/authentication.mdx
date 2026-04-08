@@ -1,0 +1,180 @@
+---
+title: 'Authentication'
+description: 'Sign up, sign in, and use JWT Bearer tokens to authenticate protected CampusHub API requests.'
+keywords: ['authentication', 'jwt', 'sign up', 'sign in', 'bearer token']
+---
+
+CampusHub uses stateless JWT authentication. After signing in you receive a token that you include in the `Authorization` header of every protected request.
+
+## Sign up
+
+Register a new user account.
+
+```
+POST /v1/auth/sign-up
+```
+
+### Request body
+
+<ParamField body="name" type="string" required>
+  Display name for the account. Between 2 and 80 characters.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Email address. Must be a valid email format. Case-insensitive — stored as lowercase.
+</ParamField>
+
+<ParamField body="role" type="string" required>
+  Account role. Must be one of: `buyer`, `seller`, or `admin`.
+
+  <Note>Creating an `admin` account via the API is permitted only in development. In production, admin accounts are provisioned directly in the database.</Note>
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Password. Between 8 and 72 characters. Use a strong password containing an uppercase letter, a number, and a special character (e.g., `StrongPass#1`).
+</ParamField>
+
+### Response
+
+Returns `201 Created` with the new user object on success. Returns `409 Conflict` if the email address is already registered.
+
+<ResponseField name="data" type="object">
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      UUID of the newly created user.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Display name.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      Email address.
+    </ResponseField>
+    <ResponseField name="role" type="string">
+      Assigned role: `buyer`, `seller`, or `admin`.
+    </ResponseField>
+    <ResponseField name="createdAt" type="string">
+      ISO 8601 timestamp of account creation.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST http://localhost:8082/v1/auth/sign-up \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Alice",
+    "email": "alice@sjsu.edu",
+    "role": "seller",
+    "password": "StrongPass#1"
+  }'
+```
+
+```json
+{
+  "data": {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Alice",
+    "email": "alice@sjsu.edu",
+    "role": "seller",
+    "createdAt": "2025-10-29T22:41:17Z"
+  }
+}
+```
+
+---
+
+## Sign in
+
+Authenticate with an existing account and receive a JWT.
+
+```
+POST /v1/auth/sign-in
+```
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  Registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password.
+</ParamField>
+
+### Response
+
+Returns `200 OK` with a token and user summary on success. Returns `401 Unauthorized` on bad credentials.
+
+<ResponseField name="data" type="object">
+  <Expandable title="properties">
+    <ResponseField name="token" type="string">
+      Signed JWT. Include this value in the `Authorization: Bearer <token>` header for all protected requests.
+    </ResponseField>
+    <ResponseField name="user" type="object">
+      <Expandable title="properties">
+        <ResponseField name="id" type="string">
+          UUID of the authenticated user.
+        </ResponseField>
+        <ResponseField name="email" type="string">
+          Email address of the authenticated user.
+        </ResponseField>
+        <ResponseField name="role" type="string">
+          Role of the authenticated user: `buyer`, `seller`, or `admin`.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST http://localhost:8082/v1/auth/sign-in \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "alice@sjsu.edu",
+    "password": "StrongPass#1"
+  }'
+```
+
+```json
+{
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "user": {
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "email": "alice@sjsu.edu",
+      "role": "seller"
+    }
+  }
+}
+```
+
+---
+
+## Using the token
+
+Add the token to every protected request as a Bearer token in the `Authorization` header.
+
+```bash
+# Store the token in a shell variable
+TOKEN=$(curl -s -X POST http://localhost:8082/v1/auth/sign-in \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@sjsu.edu","password":"StrongPass#1"}' \
+  | jq -r '.data.token')
+
+# Use the token in a protected request
+curl http://localhost:8082/v1/listings/mine \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Error responses
+
+| Status | Code | Cause |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Required fields missing or invalid format |
+| `401` | `UNAUTHORIZED` | Credentials are incorrect, token is missing, or token is expired |
+| `403` | `FORBIDDEN` | Token is valid but the account role is not permitted for this endpoint |
+| `409` | `CONFLICT` | Email address is already registered (sign-up only) |

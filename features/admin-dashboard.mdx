@@ -1,0 +1,150 @@
+---
+title: "Admin Dashboard"
+description: "Moderate content, manage users, and monitor platform health"
+---
+
+The Admin Dashboard (`/admin`) is accessible only to users with the `admin` role. After signing in with an admin account, the app automatically redirects you to the dashboard. Any attempt to access `/admin` without an admin JWT is rejected by the server with a `401 Unauthorized` response.
+
+<Warning>
+  Admin accounts cannot be created through the normal sign-up flow. They are provisioned by running the `add_admin_user.sql` script directly against the database. Contact your platform operator to request admin access.
+</Warning>
+
+---
+
+## Accessing the Dashboard
+
+<Steps>
+  <Step title="Sign in with an admin account">
+    Go to `/login` and enter your admin email and password. The sign-in response returns `"role": "admin"` in the user object, which triggers an automatic redirect to `/admin`.
+  </Step>
+  <Step title="View the metrics summary">
+    At the top of the dashboard, four stat cards give you a snapshot of platform health:
+
+    - **Total Listings** — all listings ever created (any status)
+    - **Total Users** — all registered accounts
+    - **Open Reports** — reports waiting for review
+    - **Resolved Reports** — reports that have been closed
+
+    These numbers come from the `GET /v1/admin/metrics` endpoint, which is polled once on page load.
+  </Step>
+  <Step title="Switch between dashboard sections">
+    Three tabs let you navigate between the main areas of the dashboard:
+
+    - **Reports** — the default view; shows the report queue
+    - **Users** — paginated list of all registered accounts
+    - **Metrics** — full breakdown of all platform statistics
+  </Step>
+</Steps>
+
+---
+
+## Dashboard Sections
+
+<Tabs>
+  <Tab title="Reports">
+    ### Report Queue
+
+    The Reports tab shows all reports currently in the queue (filtered to `open` status by default). Each report card displays:
+
+    - Report ID (first 8 characters of the UUID)
+    - Current status badge (colour-coded: orange for `open`, blue for `reviewing`, green for `resolved`, grey for `dismissed`)
+    - Listing ID and the reason text submitted by the reporter
+    - Reporter ID and the date/time the report was created
+    - A **View** link that opens the reported listing in a new tab
+
+    Reports that contain urgent keywords such as _"spam"_, _"fake"_, or _"scam"_ in the reason text are highlighted with a red left border. All others use a blue left border.
+
+    #### Report Statuses
+
+    | Status | Meaning |
+    |---|---|
+    | `open` | Newly submitted, awaiting review |
+    | `reviewing` | Admin has started investigating |
+    | `resolved` | Action taken — listing removed or report dismissed as invalid |
+    | `dismissed` | Report closed without action |
+
+    #### Actions on Open Reports
+
+    For reports with `open` status, two action buttons appear:
+
+    - **Dismiss** — closes the report without removing the listing (sets status to `resolved`)
+    - **Remove Listing** — force-removes the listed item from the marketplace and then sets the report status to `resolved`
+
+    <Note>
+      Clicking **Remove Listing** shows a confirmation dialog before proceeding. The listing's status is set to `removed` in the database, hiding it from all public browse results immediately.
+    </Note>
+  </Tab>
+  <Tab title="Users">
+    ### User Management
+
+    The Users tab shows a paginated list of every registered account on the platform. Each row displays:
+
+    - User's full name
+    - Role badge (purple for `admin`, blue for `seller`, grey for `buyer`)
+    - Email address
+    - Account creation date
+
+    The list is paginated in increments of 20. Use the **Previous** and **Next** buttons at the bottom to navigate through all users.
+
+    <Note>
+      User management is read-only from the dashboard UI. Modifying roles or deactivating accounts requires direct database access.
+    </Note>
+  </Tab>
+  <Tab title="Metrics">
+    ### System Metrics
+
+    The Metrics tab shows the full platform statistics from the `/v1/admin/metrics` endpoint, broken down into individual panels:
+
+    | Metric | Description |
+    |---|---|
+    | `listings` | Total listing count across all statuses |
+    | `users` | Total registered user count |
+    | `reports.open` | Reports awaiting review |
+    | `reports.reviewing` | Reports currently under investigation |
+    | `reports.resolved` | Reports that have been closed with action |
+    | `reports.dismissed` | Reports closed without action |
+
+    Metrics are fetched fresh each time you load the dashboard page.
+  </Tab>
+</Tabs>
+
+---
+
+## Report Moderation Workflow
+
+<Steps>
+  <Step title="A user submits a report">
+    Any signed-in user can report a listing from the Browse page using the ReportModal. They provide a reason (3–500 characters). The report is created with status `open` and appears in your queue immediately.
+  </Step>
+  <Step title="Admin reviews the report">
+    On the Reports tab, click **View** to open the reported listing in a new browser tab. Read the reporter's reason and assess whether the listing violates the marketplace rules.
+  </Step>
+  <Step title="Admin takes action">
+    Based on your review, choose one of the following actions:
+
+    - **Dismiss** — if the report is unfounded, click Dismiss. The report status moves to `resolved` and it leaves the open queue.
+    - **Remove Listing** — if the listing genuinely violates the rules, click Remove Listing. The listing is force-removed (status set to `removed`) and the report is marked `resolved`.
+  </Step>
+  <Step title="Metrics update">
+    After taking action, the dashboard automatically refreshes the metrics so the open and resolved counts reflect the new state.
+  </Step>
+</Steps>
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Admin API" href="/api/admin">
+    Metrics, user list, and force-remove listing endpoint reference
+  </Card>
+  <Card title="Reports API" href="/api/reports">
+    Create report, list reports by status, and update report status endpoints
+  </Card>
+  <Card title="Authentication" href="/features/authentication">
+    How admin accounts work and how the JWT role is enforced on protected routes
+  </Card>
+  <Card title="Marketplace" href="/features/marketplace">
+    How users submit reports from the Browse page using the ReportModal
+  </Card>
+</CardGroup>

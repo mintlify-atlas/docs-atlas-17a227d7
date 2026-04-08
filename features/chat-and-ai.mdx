@@ -1,0 +1,194 @@
+---
+title: "Chat and AI Assistant"
+description: "Message sellers in real time and search listings with natural language"
+---
+
+CampusHub provides two distinct communication features: **Firebase Chat** for direct buyer-seller messaging, and an **AI Assistant** powered by Google Gemini for natural language marketplace search.
+
+<Tabs>
+  <Tab title="Firebase Chat">
+    ## Firebase Real-Time Chat
+
+    CampusHub uses **Firebase Firestore** as the backend for all direct messaging between buyers and sellers. Messages are delivered in real time without polling — the browser listens for Firestore snapshot updates and the UI updates instantly.
+
+    ### Starting a Conversation
+
+    You can start a chat with a seller directly from a listing detail page. Click the **Message Seller** button on any listing and you will be taken to the Chat page (`/chat`) with the conversation pre-populated.
+
+    The URL carries query parameters that identify the conversation:
+
+    ```
+    /chat?sellerId=<seller-uuid>&listingId=<listing-uuid>&listingTitle=CMPE+202+Textbook
+    ```
+
+    When the Chat page loads with these parameters, it creates (or merges into) a Firestore conversation document with a deterministic ID:
+
+    ```
+    <sorted-participant-ids>_<listingId>
+    ```
+
+    This means if you navigate to the same listing again, you rejoin the existing conversation rather than starting a duplicate.
+
+    ### The Chat Interface
+
+    The `/chat` page has two panels:
+
+    - **Left sidebar** — lists all your conversations, sorted by most recent activity, showing the last message sent
+    - **Right panel** — the active conversation with the full message history, a text input, and a Send button
+
+    Select any conversation from the sidebar to load its messages.
+
+    ### Sending Messages
+
+    Type your message in the input field and press **Enter** or click **Send**. Each message is written to Firestore as a batch operation that simultaneously:
+
+    1. Adds the message document to `conversations/<id>/messages`
+    2. Updates the conversation's `lastMessage` and `updatedAt` fields
+
+    Messages appear in the chat immediately (Firestore's `onSnapshot` listener fires for both sender and recipient).
+
+    ### Real-Time Delivery
+
+    Firestore's `onSnapshot` subscription keeps message lists live for both participants. When a new message is written to a conversation's `messages` subcollection, both the sender's and the recipient's chat panels update without any page refresh.
+
+    <Note>
+      You must be signed in to use Firebase Chat. If you navigate to `/chat` without being logged in, you are redirected to the login page.
+    </Note>
+  </Tab>
+  <Tab title="AI Assistant">
+    ## AI Search Assistant
+
+    The AI Assistant lets you search for listings using plain English. Instead of filling in filters manually, you can type what you are looking for and the assistant will find matching listings and reply in a conversational way.
+
+    ### What It Does
+
+    The AI Assistant:
+
+    - Understands natural language queries like _"used textbook for cmpe202"_ or _"MacBook under $500"_
+    - Extracts search intent (category, keywords, price range) using **Google Gemini 2.5 Flash**
+    - Queries the database for active listings that match the extracted intent
+    - Returns a natural language answer alongside the matching listing cards
+    - Handles conversational messages (greetings, questions about the platform) without triggering a database search
+
+    ### How to Use It
+
+    Look for the **chatbot button** (ChatbotButton) in the interface. Clicking it opens the **ChatbotModal** overlay. Type your query into the input and send it.
+
+    Example queries:
+
+    - `used textbook for cmpe202`
+    - `MacBook under $500`
+    - `cheap desk for dorm`
+    - `iPhone 17 pro under 900$`
+    - `CMPE 202 textbook`
+
+    The assistant replies with a conversational message summarising what it found, and renders matching listings as cards below the answer.
+
+    ### How It Works
+
+    <Steps>
+      <Step title="Connect via WebSocket">
+        The frontend opens a WebSocket connection to the WebSocket server, authenticating with your JWT:
+
+        ```
+        ws://localhost:8081/ws?token=<your-jwt-token>
+        ```
+
+        The connection is maintained for the duration of your session.
+      </Step>
+      <Step title="Send an agent.search event">
+        When you submit a query, the frontend sends a JSON message over the WebSocket:
+
+        ```json
+        {
+          "type": "agent.search",
+          "requestId": "abc-123",
+          "payload": {
+            "query": "used textbook for cmpe202"
+          }
+        }
+        ```
+
+        The `requestId` is a unique identifier (typically a UUID or timestamp-based string) used to match the response back to your request.
+      </Step>
+      <Step title="Gemini extracts search intent">
+        The Agent Worker receives the query via the internal pub/sub bus and calls the Gemini API to extract structured search parameters:
+
+        ```json
+        {
+          "category": "Textbooks",
+          "keywords": ["cmpe202", "used"],
+          "minPrice": null,
+          "maxPrice": null
+        }
+        ```
+
+        If the Gemini API is unavailable, the worker falls back to heuristic keyword and price extraction from the raw query text.
+      </Step>
+      <Step title="Database search and ranking">
+        The worker queries the `listings` table using the extracted filters, then ranks results by relevance to the original query — exact phrase matches in the title score highest, followed by keyword matches in the title and description.
+
+        For course-specific queries like `cmpe202`, the worker also narrows results to listings whose title or description explicitly contains the course code.
+      </Step>
+      <Step title="Receive an agent.response event">
+        The server sends the result back to you over the same WebSocket connection:
+
+        ```json
+        {
+          "type": "agent.response",
+          "requestId": "abc-123",
+          "payload": {
+            "answer": "I found 2 items for 'used textbook for cmpe202'. Check them out below!",
+            "results": [
+              {
+                "id": "uuid",
+                "title": "CMPE 202 Textbook",
+                "category": "Textbooks",
+                "price": 25.00,
+                "condition": "Good",
+                "status": "active"
+              }
+            ]
+          }
+        }
+        ```
+
+        The frontend displays the `answer` text and renders each item in `results` as a listing card.
+      </Step>
+    </Steps>
+
+    ### Error Handling
+
+    If the server cannot process your query, it sends an error event:
+
+    ```json
+    {
+      "type": "error",
+      "requestId": "abc-123",
+      "payload": {
+        "message": "Invalid query",
+        "code": "INVALID_QUERY"
+      }
+    }
+    ```
+
+    If Gemini is unavailable, the worker automatically falls back to a simple keyword search so you still receive results.
+
+    <Warning>
+      The WebSocket connection requires a valid, non-expired JWT. If your session expires, the connection will be rejected. Sign in again to get a new token.
+    </Warning>
+  </Tab>
+</Tabs>
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="WebSocket API" href="/api/websocket">
+    Full event schema reference for agent.search, agent.response, and error events
+  </Card>
+  <Card title="Authentication" href="/features/authentication">
+    How to obtain a JWT token required for both Firebase Chat and the AI Assistant WebSocket connection
+  </Card>
+</CardGroup>

@@ -1,0 +1,170 @@
+---
+title: "Authentication"
+description: "Sign up, sign in, and manage your CampusHub account"
+---
+
+CampusHub uses JWT-based authentication. Every user signs up with a role that determines what they can do on the platform. Once signed in, your token is included automatically on every protected request.
+
+<Note>
+  CampusHub is a campus-only marketplace. You must use a valid campus email address ending in `@sjsu.edu` to create an account.
+</Note>
+
+## User Roles
+
+<Tabs>
+  <Tab title="Buyer">
+    Buyers are the default role assigned at sign-up. As a buyer you can:
+
+    - Browse all active listings without an account
+    - Search and filter listings by category, price range, and condition
+    - View listing details and seller contact information
+    - Message sellers directly from a listing page via Firebase Chat
+    - Use the AI assistant to find items with natural language queries
+    - Report listings that violate marketplace guidelines
+  </Tab>
+  <Tab title="Seller">
+    Sellers have all buyer capabilities plus the ability to create and manage listings:
+
+    - Create new listings with title, description, category, price, and condition
+    - Upload images for each listing
+    - Edit listing details at any time
+    - Mark a listing as sold once it has been purchased
+    - Delete (soft-remove) listings they no longer want to show
+    - View all their own listings on the My Listings page
+  </Tab>
+  <Tab title="Admin">
+    Admin accounts are created via a SQL script (`add_admin_user.sql`) and are not available through self-registration. Admins can:
+
+    - Access the Moderation Dashboard at `/admin`
+    - View platform-wide metrics: total users, total listings, open and resolved reports
+    - View and paginate through all registered users
+    - Force-remove any listing that violates platform rules
+    - Review user-submitted reports and update their status (`open` → `reviewing` → `resolved` or `dismissed`)
+
+    After signing in with an admin account, the app automatically redirects to `/admin`.
+  </Tab>
+</Tabs>
+
+---
+
+## Signing Up
+
+Navigate to `/signup` and fill in the registration form.
+
+**Form fields:**
+
+| Field | Notes |
+|---|---|
+| First Name | Required |
+| Last Name | Required |
+| Campus Email | Must end in `@sjsu.edu` |
+| Password | Minimum 8 characters — see requirements below |
+| Confirm Password | Must match the password field |
+
+<Tip>
+  Choose your role carefully at sign-up — you select **buyer** or **seller** during registration. The role controls what actions you can perform on the platform.
+</Tip>
+
+After submitting, CampusHub automatically signs you in and redirects you to the Browse page.
+
+### Password Requirements
+
+Your password must be at least 8 characters long. The API enforces a maximum of 72 characters. A strong password example from the API docs is `StrongPass#1`, which includes:
+
+- At least one uppercase letter
+- At least one number
+- At least one special character
+
+The sign-up form shows a live checklist that turns green as each requirement is met.
+
+### What happens if the email is already registered?
+
+You will see an error: _"An account with this email already exists. Please sign in instead."_ No duplicate accounts are created.
+
+---
+
+## Signing In
+
+Navigate to `/login` and enter your campus email and password.
+
+```json
+POST /v1/auth/sign-in
+Content-Type: application/json
+
+{
+  "email": "alice@sjsu.edu",
+  "password": "StrongPass#1"
+}
+```
+
+**Successful response:**
+
+```json
+{
+  "data": {
+    "token": "<JWT>",
+    "user": {
+      "id": "uuid",
+      "email": "alice@sjsu.edu",
+      "role": "seller"
+    }
+  }
+}
+```
+
+The frontend stores the JWT in `localStorage` under the key `authToken` and keeps your user info (role, email, name, id) in React context.
+
+- **Buyers and sellers** are redirected to `/browse` after sign-in.
+- **Admins** are redirected to `/admin`.
+
+If your credentials are incorrect, the API returns a `401 UNAUTHORIZED` response and the login form shows: _"Invalid credentials. Please try again."_
+
+---
+
+## Using Your Token
+
+After signing in, include your JWT in the `Authorization` header for any protected action:
+
+```bash
+Authorization: Bearer <your-jwt-token>
+```
+
+**Protected actions that require authentication:**
+
+- Creating a listing (`POST /v1/listings`)
+- Updating or deleting a listing (`PATCH`, `DELETE /v1/listings/:id`)
+- Marking a listing as sold (`POST /v1/listings/:id/mark-sold`)
+- Uploading images (`POST /v1/uploads/presign`, `POST /v1/uploads/complete`)
+- Submitting a report (`POST /v1/reports`)
+- Accessing admin endpoints (`/v1/admin/*`, `GET /v1/reports`)
+
+Browsing listings (`GET /v1/listings`) and viewing a single listing (`GET /v1/listings/:id`) are **public** — no token is required.
+
+---
+
+## Token Expiry and Errors
+
+If your token is expired or invalid, the API returns:
+
+```json
+HTTP 401 Unauthorized
+```
+
+The frontend intercepts this response and redirects you to `/login?error=session_expired`, where you will see the message: _"Your session has expired. Please log in again."_
+
+<Warning>
+  Do not share your JWT token. It grants full access to your account for all protected actions, including creating and deleting listings.
+</Warning>
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Authentication API" href="/api/authentication">
+    Full sign-up and sign-in endpoint reference with request/response schemas
+  </Card>
+  <Card title="Marketplace" href="/features/marketplace">
+    What you can do once you are signed in — creating and managing listings
+  </Card>
+</CardGroup>

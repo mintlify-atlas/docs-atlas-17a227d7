@@ -1,0 +1,310 @@
+---
+title: 'WebSocket API'
+description: 'Real-time AI-powered search assistant over WebSocket. Send natural language queries and receive matching listings.'
+keywords: ['websocket', 'ai search', 'real-time', 'chatbot', 'agent', 'natural language search']
+---
+
+CampusHub provides a WebSocket server for real-time AI-assisted marketplace search. Clients send a natural language query; the server parses the intent using the Gemini AI model, queries the listings database with the extracted filters, and returns matching results along with a natural language answer.
+
+<Note>
+  The WebSocket server uses the Gemini AI model for query parsing. Ensure `GEMINI_API_KEY` is set in the backend environment. The worker must be running alongside the WebSocket server for queries to be processed.
+</Note>
+
+---
+
+## Connection
+
+Establish a WebSocket connection by including your JWT token as a query parameter.
+
+| Environment | URL |
+|---|---|
+| Development | `ws://localhost:8081/ws?token=<JWT>` |
+| Production | `wss://your-domain.com/ws?token=<JWT>` |
+
+Authentication is required. Connections without a valid JWT are rejected immediately.
+
+---
+
+## Event schema
+
+All messages — both client-to-server and server-to-client — share the same base structure.
+
+```json
+{
+  "type": "agent.search | agent.response | error",
+  "requestId": "unique-uuid",
+  "payload": {}
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | Event type identifier |
+| `requestId` | string | UUID you generate. The server echoes this value in the response so you can match requests to replies |
+| `payload` | object | Event-specific data |
+
+---
+
+## Sending a search query
+
+Send an `agent.search` event to search listings using natural language.
+
+**Event type:** `agent.search` (client → server)
+
+```json
+{
+  "type": "agent.search",
+  "requestId": "abc-123",
+  "payload": {
+    "query": "used textbook for cmpe202"
+  }
+}
+```
+
+**Payload fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | Yes | Natural language search query, e.g. `"MacBook under $500"` or `"used textbook for cmpe202"` |
+
+### JavaScript example
+
+```javascript
+const token = "your-jwt-token";
+const ws = new WebSocket(`ws://localhost:8081/ws?token=${token}`);
+
+ws.onopen = () => {
+  console.log("Connected to CampusHub WebSocket");
+
+  ws.send(JSON.stringify({
+    type: "agent.search",
+    requestId: "req-" + Date.now(),
+    payload: {
+      query: "used textbook for cmpe202"
+    }
+  }));
+};
+```
+
+---
+
+## Receiving responses
+
+The server sends an `agent.response` event after the AI worker has processed the query and fetched matching listings.
+
+**Event type:** `agent.response` (server → client)
+
+```json
+{
+  "type": "agent.response",
+  "requestId": "abc-123",
+  "payload": {
+    "answer": "I found 2 items for 'used textbook for cmpe202'. Here are the best matches:",
+    "results": [
+      {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "sellerId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "title": "CMPE 202 Textbook",
+        "description": "Lightly used, pickup at library",
+        "category": "Textbooks",
+        "price": 25.00,
+        "condition": "Good",
+        "status": "active",
+        "createdAt": "2025-10-29T22:41:17Z",
+        "updatedAt": "2025-10-29T22:41:17Z",
+        "primaryImage": {
+          "key": "uploads/2025/10/uuid.jpg",
+          "url": "https://s3...signed-get..."
+        }
+      }
+    ]
+  }
+}
+```
+
+**Payload fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `answer` | string | Natural language summary of the search results |
+| `results` | object[] | Array of matching listing objects |
+| `results[].primaryImage` | object \| null | Primary image with `key` and presigned `url`, or `null` if no image is attached |
+
+### JavaScript example
+
+```javascript
+ws.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+
+  if (message.type === "agent.response") {
+    console.log("Answer:", message.payload.answer);
+    console.log("Results:", message.payload.results);
+  }
+
+  if (message.type === "error") {
+    console.error("Error:", message.payload.message, message.payload.code);
+  }
+};
+```
+
+---
+
+## Error events
+
+The server sends an `error` event when a message cannot be processed.
+
+**Event type:** `error` (server → client)
+
+```json
+{
+  "type": "error",
+  "requestId": "abc-123",
+  "payload": {
+    "message": "Invalid query",
+    "code": "INVALID_QUERY"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `message` | string | Human-readable error description |
+| `code` | string | Machine-readable error code |
+
+**Common error codes:**
+
+| Code | Cause |
+|---|---|
+| `INVALID_QUERY` | The query payload is missing or empty |
+
+---
+
+## Complete example
+
+Full flow: connect, send a query, and handle the response.
+
+```javascript
+function connectCampusHubWS(jwtToken) {
+  const ws = new WebSocket(`ws://localhost:8081/ws?token=${jwtToken}`);
+
+  ws.onopen = () => {
+    console.log("Connected");
+
+    // Send a search query
+    ws.send(JSON.stringify({
+      type: "agent.search",
+      requestId: "req-" + Date.now(),
+      payload: {
+        query: "MacBook under $500"
+      }
+    }));
+  };
+
+  ws.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+
+    switch (message.type) {
+      case "agent.response":
+        console.log("Answer:", message.payload.answer);
+        message.payload.results.forEach((listing) => {
+          console.log(`- ${listing.title} ($${listing.price})`);
+        });
+        break;
+
+      case "error":
+        console.error(`[${message.payload.code}] ${message.payload.message}`);
+        break;
+
+      default:
+        console.log("Unknown event type:", message.type);
+    }
+  };
+
+  ws.onerror = (error) => {
+    console.error("WebSocket error:", error);
+  };
+
+  ws.onclose = () => {
+    console.log("Disconnected — reconnecting in 3 seconds...");
+    setTimeout(() => connectCampusHubWS(jwtToken), 3000);
+  };
+
+  return ws;
+}
+```
+
+---
+
+## Testing with wscat
+
+[wscat](https://github.com/websockets/wscat) is a CLI tool for interacting with WebSocket servers.
+
+<Steps>
+
+<Step title="Install wscat">
+
+```bash
+npm install -g wscat
+```
+
+</Step>
+
+<Step title="Get a JWT token">
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8082/v1/auth/sign-in \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@sjsu.edu","password":"StrongPass#1"}' \
+  | jq -r '.data.token')
+```
+
+</Step>
+
+<Step title="Connect to the WebSocket server">
+
+```bash
+wscat -c "ws://localhost:8081/ws?token=$TOKEN"
+```
+
+</Step>
+
+<Step title="Send a search query">
+
+Once connected, paste the following JSON and press Enter:
+
+```json
+{"type":"agent.search","requestId":"test-123","payload":{"query":"used textbook for cmpe202"}}
+```
+
+</Step>
+
+<Step title="Read the response">
+
+The server returns an `agent.response` event:
+
+```json
+{
+  "type": "agent.response",
+  "requestId": "test-123",
+  "payload": {
+    "answer": "I found 1 item matching 'used textbook for cmpe202'.",
+    "results": [...]
+  }
+}
+```
+
+</Step>
+
+</Steps>
+
+---
+
+## Connection health
+
+The WebSocket server uses standard WebSocket ping/pong frames to detect stale connections. Clients that do not respond to pings are disconnected automatically. The JavaScript `WebSocket` API handles ping/pong transparently in browsers.
+
+For Node.js clients using the `ws` library, enable the built-in ping/pong handling:
+
+```javascript
+ws.on("ping", () => ws.pong());
+```
